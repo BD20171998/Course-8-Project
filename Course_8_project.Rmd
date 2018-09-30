@@ -1,0 +1,104 @@
+---
+title: "Course 8 project"
+author: "Robert Deprizio"
+date: "9/30/2018"
+output: html_document
+---
+
+```{r}
+library(parallel)
+library(doParallel)
+library(caret)
+library(randomForest)
+library(mgcv)
+#Prep for parallel processing
+
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+##Setting TrainControl for models to be used
+fitControl <- trainControl(method = "cv",number = 10,allowParallel= TRUE)
+```
+
+## Pre-processing
+
+Read in the data and after remove variables with little or no data  from the data sets used to help build the model.
+```{r setup, include=FALSE}
+##reading in raw data
+training_raw<-read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"),na.strings = c("#DIV/0!","NA"," ",""))
+
+testing_raw<- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"),na.strings = c("#DIV/0!","NA"," ",""))
+
+data_for_model<-training_raw
+
+#Identify and drop which variables with little or no data
+empties<-apply(data_for_model, 2, function(x) length(which(is.na(x))))
+data_for_model<-data_for_model[,-which(empties!=0)]
+
+##Determining if any variables are near 0-wasn't really any
+nearZeroVar(data_for_model,saveMetrics = TRUE)
+
+#Identifying variables to keep
+variables_to_keep<-colnames(data_for_model)
+```
+
+
+## Building indicies and data sets (training,validation,&testing)
+```{r}
+inBuild<-createDataPartition(y=data_for_model$classe,p=0.7,list = FALSE)
+validation<-data_for_model[-inBuild,]
+buildData<-data_for_model[inBuild,]
+
+inTrain<-createDataPartition(y=buildData$classe,p=0.7,list = FALSE)
+training<-buildData[inTrain,]
+testing<-buildData[-inTrain,]
+```
+
+## Building Potential Models
+```{r}
+model_1<-train(classe~.,method="rf",trControl=fitControl,preProcess="pca",data=training)
+
+model_2<-train(classe~.,method="gbm",data=training,trControl = fitControl,verbose=FALSE,preProcess="pca")
+
+predict_1<-predict(model_1,testing)
+predict_2<-predict(model_2,testing)
+predict_3<-data.frame(predict_1,predict_2,classe=testing$classe)
+
+model_3<-train(classe~.,method="gam",data=predict_3,trControl = fitControl)
+
+predict_1_val<-predict(model_1,validation)
+predict_2_val<-predict(model_2,validation)
+predict_combo_val<-data.frame(predict_1=predict_1_val,predict_2=predict_2_val)
+
+predict_3_val<-predict(model_3,newdata=predict_combo_val)
+```
+
+## Checking accuracy and out of sample error 
+```{r}
+
+##Accuracy for models 1 and 2 using testing data
+confusionMatrix(predict_1, testing$classe)$overall
+confusionMatrix(predict_2, testing$classe)$overall
+
+##Accuracy of all models using the validation data
+confusionMatrix(predict_1_val, validation$classe)$overall
+confusionMatrix(predict_2_val, validation$classe)$overall
+confusionMatrix(predict_3_val, validation$classe)$overall
+
+out_of_samp<-data.frame(Predictions=predict_1_val,Actual=validation$classe)
+out_of_samp_error<-1-(sum(out_of_samp$Predictions==out_of_samp$Actual)/length(validation$classe))                        
+```
+
+## Quiz Predictions
+```{r}
+##keeping variables used for creation of models
+data_for_quiz<-testing_raw[,intersect(names(testing_raw),names(data_for_model))]
+quiz_answers<-predict(model_1,data_for_quiz)
+```
+
+
+## De-register parallel processing cluster
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
